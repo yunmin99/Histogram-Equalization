@@ -1,0 +1,124 @@
+`timescale 1ns / 1ps
+
+module tb_top;
+
+  parameter DWIDTH    = 8;
+  parameter AWIDTH    = 21;
+  parameter MEM_SIZE  = 545920;
+  parameter TOTAL_PIX = 1091840;
+  parameter MAX_VALUE = 256;
+
+  reg clk = 0;
+  reg reset = 0;
+  reg we = 0;
+  reg we1 = 0;
+  reg we2 = 0;
+  reg HE_Start = 0;
+  reg [DWIDTH-1:0] din = 0;
+  reg [AWIDTH-1:0] addr = 0;
+  reg start_he = 0;
+
+  wire [DWIDTH-1:0] dout;
+  wire [AWIDTH-1:0] dst_out;
+
+  always #5 clk = ~clk;
+
+  BRAM bram_inst (
+    .we(we),
+    .clk(clk),
+    .addr(addr),
+    .dout(dout),
+    .din(din),
+    .start_he(start_he)
+  );
+
+  HE_Calc he_calc_inst (
+    .clk(clk),
+    .reset(reset),
+    .we1(we1),
+    .we2(we2),
+    .HE_Start(HE_Start),
+    .din(dout),
+    .dst_out(dst_out)
+  );
+
+  integer i;
+
+  reg [DWIDTH-1:0] img_data [0:1091839];
+
+  initial begin
+
+ 
+    $readmemh("C:/Users/82104/Desktop/VIVADO/HE/gray_values_hex.txt", img_data);
+
+    // 1. Reset
+    #10
+    reset = 1;
+    @(posedge clk);
+    reset = 0;
+    @(posedge clk);
+
+    // 2. BRAM에 이미지 데이터 쓰기
+    we = 1;
+    for (i = 0; i < MEM_SIZE; i = i + 1) begin
+      din = img_data[i];  // 파일에서 읽은 픽셀 밝기값
+      addr = i;
+      @(posedge clk);
+    end
+    we = 0;
+
+    // 3. Equalization 시작 (HE_Start → HIST1_LUT)
+    HE_Start = 1;
+    repeat (5) @(posedge clk);
+    HE_Start = 0;
+
+    // 4. FSM이 HIST1_LUT 진입할 때까지 대기
+    wait (he_calc_inst.current_state == 7'b0000100);
+
+    // 5. we1, start_he 활성화 → BRAM에서 HE_Calc로 데이터 공급
+    we1 = 1;
+    #10;
+    start_he = 1;
+    for (i = 0; i < MEM_SIZE; i = i + 1) begin
+      addr = i;
+      @(posedge clk);
+    end
+    repeat (3) @(posedge clk);
+    start_he = 0;
+    we1 = 0;
+
+    // 6. 뒤 절반 BRAM에 다시 쓰기
+    we = 1;
+    for (i = 0; i < MEM_SIZE; i = i + 1) begin
+      din = img_data[i + MEM_SIZE];
+      addr = i;
+      @(posedge clk);
+    end
+    we = 0;
+
+    // 7. HIST2_LUT 상태 진입까지 대기
+    wait (he_calc_inst.current_state == 7'b0001000);
+
+    // 8. we2, start_he 활성화 → 다시 데이터 공급
+    we2 = 1;
+    #10;
+    start_he = 1;
+    #10;
+    for (i = 0; i < MEM_SIZE; i = i + 1) begin
+      addr = i;
+      @(posedge clk);
+    end
+    repeat (3) @(posedge clk);
+    start_he = 0;
+    we2 = 0;
+
+    // 9. FSM 나머지 기다리기
+    repeat (20010) @(posedge clk);
+
+    $finish;
+  end
+
+endmodule
+
+
+
